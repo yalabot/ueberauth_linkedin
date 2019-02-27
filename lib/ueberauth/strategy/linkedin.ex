@@ -105,12 +105,15 @@ defmodule Ueberauth.Strategy.LinkedIn do
   """
   def info(conn) do
     raw_user_response = conn.private.linkedin_user
+    first_name = get_user_field(raw_user_response, "firstName")
+    last_name = get_user_field(raw_user_response, "lastName")
     email = conn.private[:linkedin_email]
     profile_image_size = option(conn, :profile_image_size)
 
     %Info{
-      first_name: get_user_field(raw_user_response, "firstName"),
-      last_name: get_user_field(raw_user_response, "lastName"),
+      first_name: first_name,
+      last_name: last_name,
+      name: first_name <> " " <> last_name,
       image: get_user_image_url(raw_user_response, profile_image_size),
       email: email
     }
