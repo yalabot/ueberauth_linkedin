@@ -5,7 +5,8 @@ defmodule Ueberauth.Strategy.LinkedIn do
 
   use Ueberauth.Strategy,
     uid_field: :id,
-    default_scope: "r_basicprofile r_emailaddress"
+    default_scope: "r_liteprofile r_emailaddress",
+    profile_image_size: 400
 
   alias Ueberauth.Auth.Info
   alias Ueberauth.Auth.Credentials
@@ -49,6 +50,7 @@ defmodule Ueberauth.Strategy.LinkedIn do
         conn
         |> delete_resp_cookie(@state_cookie_name)
         |> fetch_user(token)
+        |> fetch_email(token)
       else
         conn
         |> delete_resp_cookie(@state_cookie_name)
@@ -68,6 +70,7 @@ defmodule Ueberauth.Strategy.LinkedIn do
   def handle_cleanup!(conn) do
     conn
     |> put_private(:linkedin_user, nil)
+    |> put_private(:linkedin_email, nil)
     |> put_private(:linkedin_token, nil)
   end
 
@@ -101,13 +104,15 @@ defmodule Ueberauth.Strategy.LinkedIn do
   Fetches the fields to populate the info section of `Ueberauth.Auth` struct.
   """
   def info(conn) do
-    user = conn.private.linkedin_user
+    raw_user_response = conn.private.linkedin_user
+    email = conn.private[:linkedin_email]
+    profile_image_size = option(conn, :profile_image_size)
 
     %Info{
-      email: user["emailAddress"],
-      first_name: user["firstName"],
-      image: user["pictureUrl"],
-      last_name: user["lastName"]
+      first_name: get_user_field(raw_user_response, "firstName"),
+      last_name: get_user_field(raw_user_response, "lastName"),
+      image: get_user_image_url(raw_user_response, profile_image_size),
+      email: email
     }
   end
 
@@ -127,17 +132,19 @@ defmodule Ueberauth.Strategy.LinkedIn do
   defp skip_url_encode_option, do: [path_encode_fun: fn(a) -> a end]
 
   defp user_query do
-    "/v1/people/~:(id,picture-url,email-address,firstName,lastName)?format=json"
+    "/v2/me?projection=(id,firstName,lastName,profilePicture(displayImage~:playableStreams))"
+  end
+
+  defp email_query do
+    "/v2/emailAddress?q=members&projection=(elements*(handle~))"
   end
 
   defp fetch_user(conn, token) do
     conn = put_private(conn, :linkedin_token, token)
     resp = Ueberauth.Strategy.LinkedIn.OAuth.get(token, user_query, [], skip_url_encode_option)
 
-IO.puts("linkedin fetch_user, resp = #{inspect resp}")
-
     case resp do
-      { :ok, %OAuth2.Response{status_code: 401, body: _body}} ->
+      { :ok, %OAuth2.Response{status_code: status, body: _body}} when status in [401, 403] ->
         set_errors!(conn, [error("token", "unauthorized")])
       { :ok, %OAuth2.Response{status_code: status_code, body: user} }
         when status_code in 200..399 ->
@@ -147,7 +154,46 @@ IO.puts("linkedin fetch_user, resp = #{inspect resp}")
     end
   end
 
+  defp fetch_email(conn, token) do
+    resp = Ueberauth.Strategy.LinkedIn.OAuth.get(token, email_query, [], skip_url_encode_option)
+
+    case resp do
+      { :ok, %OAuth2.Response{status_code: status, body: _body}} when status in [401, 403] ->
+        conn
+      { :ok, %OAuth2.Response{status_code: status_code, body: email_response} }
+        when status_code in 200..399 ->
+          with %{"elements" => [email_element | _]} <- email_response,
+              email when is_binary(email) <- get_in(email_element, ["handle~", "emailAddress"]) do
+            put_private(conn, :linkedin_email, email)
+          else
+            _ ->
+              conn
+          end
+      { :error, %OAuth2.Error{reason: reason} } ->
+        set_errors!(conn, [error("OAuth2", reason)])
+    end
+  end
+
   defp option(conn, key) do
     Dict.get(options(conn), key, Dict.get(default_options, key))
+  end
+
+  defp get_user_image_url(raw_user_response, profile_image_size) do
+    with profile_images when is_list(profile_images) <- get_in(raw_user_response, ["profilePicture", "displayImage~", "elements"]) do
+      Enum.find_value profile_images, fn %{"data" => data, "identifiers" => identifiers} ->
+        if get_in(data, ["com.linkedin.digitalmedia.mediaartifact.StillImage", "storageSize", "width"]) == profile_image_size do
+          Enum.at(identifiers, 0)
+          |> Map.get("identifier")
+        end
+      end
+    end
+  end
+
+  defp get_user_field(raw_user_response, field_name) do
+    with field when is_map(field) <- raw_user_response[field_name],
+         %{"country" => country, "language" => language} <- field["preferredLocale"] do
+      locale_id = language <> "_" <> country
+      get_in(field, ["localized", locale_id])
+    end
   end
 end
