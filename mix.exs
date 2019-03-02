@@ -8,14 +8,14 @@ defmodule UeberauthLinkedin.Mixfile do
      version: "0.3.2",
      name: "Ueberauth LinkedIn Strategy",
      elixir: "~> 1.2",
-     package: package,
+     package: package(),
      source_url: @url,
      homepage_url: @url,
-     description: description,
+     description: description(),
      build_embedded: Mix.env == :prod,
      start_permanent: Mix.env == :prod,
-     deps: deps,
-     docs: docs]
+     deps: deps(),
+     docs: docs()]
   end
 
   # Configuration for the OTP application
@@ -26,7 +26,7 @@ defmodule UeberauthLinkedin.Mixfile do
   end
 
   defp docs do
-    [extras: docs_extras, main: "readme"]
+    [extras: docs_extras(), main: "readme"]
   end
 
   defp docs_extras do
